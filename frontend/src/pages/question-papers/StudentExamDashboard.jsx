@@ -15,6 +15,12 @@ import {
 } from 'react-icons/fi';
 import { questionPaperService, systemTimeService } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { 
+  formatIST, 
+  formatDateIST, 
+  formatUTC, 
+  formatExamWindowIST 
+} from '../../utils/timeFormat';
 
 export default function StudentExamDashboard() {
   const { user, addToast } = useAuth();
@@ -83,7 +89,11 @@ export default function StudentExamDashboard() {
 
   const formatCountdown = (targetDateStr) => {
     if (!targetDateStr) return '00:00:00';
-    const target = new Date(targetDateStr);
+    let iso = typeof targetDateStr === 'string' ? targetDateStr.trim() : targetDateStr;
+    if (typeof iso === 'string' && !iso.endsWith('Z') && !iso.includes('+') && !iso.includes('-') && iso.length >= 19) {
+      iso = iso + 'Z';
+    }
+    const target = new Date(iso);
     const diffMs = target.getTime() - serverTime.getTime();
     if (diffMs <= 0) return '00:00:00';
     
@@ -117,6 +127,9 @@ export default function StudentExamDashboard() {
             <div>
               <p className="text-[10px] uppercase tracking-wider text-slate-400">Authoritative Server Time</p>
               <p className="font-mono-code font-bold text-sm text-slate-100">
+                {formatIST(serverTime.toISOString())}
+              </p>
+              <p className="font-mono text-[10px] text-slate-400">
                 {serverTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })} UTC
               </p>
             </div>
@@ -139,8 +152,11 @@ export default function StudentExamDashboard() {
       ) : papers.length > 0 ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {papers.map((paper) => {
-            const relDate = paper.release_at ? new Date(paper.release_at) : null;
-            const examStart = paper.exam_start_at ? new Date(paper.exam_start_at) : null;
+            let relIso = paper.release_at;
+            if (typeof relIso === 'string' && !relIso.endsWith('Z') && !relIso.includes('+') && !relIso.includes('-') && relIso.length >= 19) {
+              relIso = relIso + 'Z';
+            }
+            const relDate = relIso ? new Date(relIso) : null;
             const isReleased = paper.can_decrypt || (relDate && serverTime >= relDate);
             const countdownStr = formatCountdown(paper.release_at);
 
@@ -158,13 +174,13 @@ export default function StudentExamDashboard() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <span className="badge badge-neutral text-[11px] font-mono-code font-semibold mb-1.5 inline-block">
-                        {paper.course_id || 'CS-804'} &middot; Sec {paper.section || 'A'}
+                        {paper.course_id || 'CS-702'} &middot; Sec {paper.section || 'CSE-A'} &middot; Yr {paper.year || '3'}
                       </span>
                       <h2 className="text-lg font-bold leading-tight" style={{ color: 'var(--text-primary)' }}>
                         {paper.subject || 'Academic Examination'}
                       </h2>
                       <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {paper.exam_name || 'Midterm Examination'} &middot; Paper ID: <span className="font-mono-code font-semibold">{paper.id}</span>
+                        {paper.exam_name || 'Final Semester Examination'} &middot; Paper ID: <span className="font-mono-code font-semibold">{paper.id}</span>
                       </p>
                     </div>
 
@@ -184,17 +200,23 @@ export default function StudentExamDashboard() {
                   {/* Schedule Times & Countdown */}
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <div className="p-3 rounded-lg border" style={{ backgroundColor: 'var(--bg-input)', borderColor: 'var(--border-subtle)' }}>
-                      <span className="uppercase text-[10px] tracking-wider block mb-1 text-slate-400">Exam Window</span>
-                      <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                        {examStart ? examStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '10:00 AM'}
+                      <span className="uppercase text-[10px] tracking-wider block mb-1 text-slate-400">Exam Window (IST)</span>
+                      <span className="font-semibold text-sm text-blue-400 font-mono">
+                        {formatExamWindowIST(paper.exam_start_at, paper.exam_end_at)}
                       </span>
+                      <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                        UTC: {formatUTC(paper.exam_start_at)}
+                      </p>
                     </div>
 
                     <div className="p-3 rounded-lg border" style={{ backgroundColor: 'var(--bg-input)', borderColor: 'var(--border-subtle)' }}>
-                      <span className="uppercase text-[10px] tracking-wider block mb-1 text-slate-400">Scheduled Release</span>
-                      <span className="font-semibold text-sm text-emerald-500">
-                        {relDate ? relDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '09:55 AM'}
+                      <span className="uppercase text-[10px] tracking-wider block mb-1 text-slate-400">Scheduled Release (IST)</span>
+                      <span className="font-semibold text-sm text-emerald-400 font-mono">
+                        {formatIST(paper.release_at)}
                       </span>
+                      <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                        {formatDateIST(paper.release_at)} &middot; {formatUTC(paper.release_at)}
+                      </p>
                     </div>
                   </div>
 
@@ -211,7 +233,7 @@ export default function StudentExamDashboard() {
                         </span>
                       </div>
                       <p className="text-[11px] leading-relaxed text-slate-300">
-                        This question paper is encrypted at rest using AES-256-GCM + RSA-OAEP-3072. The decryption key is locked on the server and cannot be released before {relDate ? relDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'release time'}.
+                        This question paper is encrypted at rest using {paper.encryption_algorithm || 'AES-256-GCM'} + {paper.key_management_algorithm || 'RSA-OAEP-3072'}. The decryption key is locked on the server and cannot be released before {formatIST(paper.release_at)}.
                       </p>
                     </div>
                   ) : (

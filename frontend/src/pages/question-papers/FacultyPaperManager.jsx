@@ -18,6 +18,12 @@ import {
 import { questionPaperService, systemTimeService } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import StatCard from '../../components/StatCard';
+import { 
+  formatIST, 
+  formatDateIST, 
+  formatUTC, 
+  formatExamWindowIST 
+} from '../../utils/timeFormat';
 
 export default function FacultyPaperManager() {
   const { user, addToast } = useAuth();
@@ -183,11 +189,12 @@ export default function FacultyPaperManager() {
             <thead>
               <tr>
                 <th>Paper ID</th>
-                <th>Course & Subject</th>
-                <th>Exam Window</th>
-                <th>Scheduled Release</th>
+                <th>Course & Examination</th>
+                <th>Target & Eligible Students</th>
+                <th>Exam Window (IST)</th>
+                <th>Scheduled Release (IST)</th>
                 <th>Security Profile</th>
-                <th>Distribution Mode</th>
+                <th>Mode</th>
                 <th>Lifecycle Status</th>
                 <th className="text-right">Actions</th>
               </tr>
@@ -195,15 +202,14 @@ export default function FacultyPaperManager() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="p-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={9} className="p-10 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                     Loading question paper registry...
                   </td>
                 </tr>
               ) : papers.length > 0 ? (
                 papers.map((p) => {
-                  const relDate = p.release_at ? new Date(p.release_at) : null;
-                  const examStart = p.exam_start_at ? new Date(p.exam_start_at) : null;
                   const isScheduled = p.status === 'SCHEDULED';
+                  const eligibleCount = p.eligible_students_count ?? 0;
                   
                   return (
                     <tr key={p.id}>
@@ -218,20 +224,39 @@ export default function FacultyPaperManager() {
                             {p.subject || 'Examination'}
                           </p>
                           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                            {p.course_id || 'CS-804'} &middot; Sec {p.section || 'A'} &middot; {p.original_filename}
+                            {p.course_id || 'CS-702'} &middot; {p.original_filename}
                           </p>
                         </div>
                       </td>
-                      <td className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        {examStart ? examStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      <td>
+                        <div className="space-y-1">
+                          <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                            {p.department || 'CSE'} &middot; Sec {p.section || 'A'} &middot; Yr {p.year || '3'} &middot; Sem {p.semester || '1'}
+                          </p>
+                          <span className={`badge text-[10px] font-bold ${
+                            eligibleCount > 0 ? 'badge-success' : 'badge-warning'
+                          }`}>
+                            {eligibleCount} Eligible Students
+                          </span>
+                        </div>
                       </td>
                       <td>
-                        <div className="text-xs">
-                          <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                            {relDate ? relDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        <div className="text-xs space-y-0.5">
+                          <p className="font-semibold text-blue-500 dark:text-blue-400 font-mono">
+                            {formatExamWindowIST(p.exam_start_at, p.exam_end_at)}
                           </p>
-                          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            {relDate ? relDate.toLocaleDateString() : ''}
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            Stored: {formatUTC(p.exam_start_at)}
+                          </p>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="text-xs space-y-0.5">
+                          <p className="font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                            {formatIST(p.release_at)}
+                          </p>
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {formatDateIST(p.release_at)} &middot; {formatUTC(p.release_at)}
                           </p>
                         </div>
                       </td>
@@ -242,7 +267,7 @@ export default function FacultyPaperManager() {
                       </td>
                       <td>
                         <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-500/10 text-slate-400 border border-slate-500/20">
-                          {p.distribution_mode === 'MODE_B' ? 'Mode B (Pre-Download)' : 'Mode A (Stream Release)'}
+                          {p.distribution_mode === 'MODE_B' ? 'Mode B' : 'Mode A'}
                         </span>
                       </td>
                       <td>
@@ -276,7 +301,7 @@ export default function FacultyPaperManager() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={8} className="p-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={9} className="p-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                     <FiFileText className="w-8 h-8 mx-auto mb-2 opacity-40" />
                     <p>No question papers registered yet.</p>
                     <Link to="/question-papers/create" className="text-blue-600 dark:text-blue-400 font-semibold text-xs mt-2 inline-block hover:underline">

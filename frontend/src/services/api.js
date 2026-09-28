@@ -36,9 +36,16 @@ api.interceptors.response.use(
 // Auth Services
 export const authService = {
   login: (email, password) => api.post('/auth/login', { email, password }),
-  register: (username, email, password, role = 'student') => api.post('/auth/register', { username, email, password, role }),
+  // Full registration payload: role + profile fields
+  register: (payload) => api.post('/auth/register', payload),
   getProfile: () => api.get('/profile'),
   updateSettings: (settings) => api.put('/settings', settings),
+};
+
+// Department & Eligible Students Metadata
+export const departmentService = {
+  getDepartments: () => api.get('/departments'),
+  getEligibleStudents: (params) => api.get('/faculty/eligible-students', { params }),
 };
 
 // File Services
@@ -72,6 +79,7 @@ export const statsService = {
 export const examService = {
   getFacultyExams: () => api.get('/faculty/exams'),
   createExam: (examData) => api.post('/exams', examData),
+  updateExam: (id, examData) => api.put(`/exams/${id}`, examData),
 };
 
 // Secure Question Paper Distribution Services
@@ -97,6 +105,13 @@ export const cryptoPolicyService = {
   getProfiles: () => api.get('/admin/crypto-profiles'),
   setDefaultProfile: (profileId) => api.put('/admin/crypto-profiles/default', { profile_id: profileId }),
   getSecurityMetrics: () => api.get('/admin/security-metrics'),
+};
+
+// Admin Management Services
+export const adminService = {
+  getUsers: () => api.get('/admin/users'),
+  getExaminations: () => api.get('/admin/examinations'),
+  getQuestionPapers: () => api.get('/admin/question-papers'),
 };
 
 // Audit Log Services

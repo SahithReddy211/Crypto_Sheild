@@ -23,23 +23,54 @@ import StudentExamDashboard from './pages/question-papers/StudentExamDashboard';
 import SecurePaperViewer from './pages/question-papers/SecurePaperViewer';
 import AdminCryptoPolicy from './pages/question-papers/AdminCryptoPolicy';
 
-// Protected Route Guard
+// ── Authentication guard ─────────────────────────────────────────────────────
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated } = useAuth();
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
   return children;
 };
 
-// Public Route Guard (Redirects away from login/register if already logged in)
-const PublicRoute = ({ children }) => {
-  const { isAuthenticated } = useAuth();
-  if (isAuthenticated) {
-    return <Navigate to="/question-papers/faculty" replace />;
-  }
+// ── Role guard (403 redirect when role doesn't match) ─────────────────────────
+const RoleRoute = ({ children, roles }) => {
+  const { isAuthenticated, user } = useAuth();
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!roles.includes(user?.role)) return <Navigate to="/unauthorized" replace />;
   return children;
 };
+
+// ── Public route guard: redirect authenticated users to their home page ───────
+const PublicRoute = ({ children }) => {
+  const { isAuthenticated, user } = useAuth();
+  if (!isAuthenticated) return children;
+  // Redirect authenticated users to their role home
+  const roleHome = {
+    student: '/question-papers/student',
+    faculty: '/question-papers/faculty',
+    admin:   '/question-papers/admin-policy',
+  };
+  return <Navigate to={roleHome[user?.role] || '/dashboard'} replace />;
+};
+
+// ── Role-based default landing ─────────────────────────────────────────────────
+const RoleBasedHome = () => {
+  const { user } = useAuth();
+  const roleHome = {
+    student: '/question-papers/student',
+    faculty: '/question-papers/faculty',
+    admin:   '/question-papers/admin-policy',
+  };
+  return <Navigate to={roleHome[user?.role] || '/dashboard'} replace />;
+};
+
+// ── Simple Unauthorized page ──────────────────────────────────────────────────
+const Unauthorized = () => (
+  <div className="min-h-screen flex flex-col items-center justify-center gap-4" style={{ backgroundColor: 'var(--bg-base)' }}>
+    <div className="text-6xl">🔒</div>
+    <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Access Denied</h1>
+    <p style={{ color: 'var(--text-secondary)' }}>You don't have permission to view this page.</p>
+    <a href="/login" className="btn-primary px-4 py-2 text-sm mt-2">Return to Login</a>
+  </div>
+);
 
 export default function App() {
   return (
@@ -48,55 +79,58 @@ export default function App() {
         <Router>
           <Routes>
             {/* Public Auth Routes */}
-            <Route
-              path="/login"
-              element={
-                <PublicRoute>
-                  <Login />
-                </PublicRoute>
-              }
-            />
-            <Route
-              path="/register"
-              element={
-                <PublicRoute>
-                  <Register />
-                </PublicRoute>
-              }
-            />
+            <Route path="/login"    element={<PublicRoute><Login /></PublicRoute>} />
+            <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+            <Route path="/unauthorized" element={<Unauthorized />} />
 
             {/* Protected Application Routes */}
             <Route
               path="/"
-              element={
-                <ProtectedRoute>
-                  <MainLayout />
-                </ProtectedRoute>
-              }
+              element={<ProtectedRoute><MainLayout /></ProtectedRoute>}
             >
-              <Route index element={<Navigate to="/question-papers/faculty" replace />} />
-              
-              {/* Question Paper Module Routes */}
-              <Route path="question-papers/faculty" element={<FacultyPaperManager />} />
-              <Route path="question-papers/create" element={<CreateQuestionPaperWizard />} />
-              <Route path="question-papers/student" element={<StudentExamDashboard />} />
-              <Route path="question-papers/viewer/:id" element={<SecurePaperViewer />} />
-              <Route path="question-papers/admin-policy" element={<AdminCryptoPolicy />} />
+              {/* Role-based home redirect */}
+              <Route index element={<RoleBasedHome />} />
 
-              {/* Crypto Agility Vault & Benchmarks */}
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="upload" element={<UploadModule />} />
-              <Route path="encrypt" element={<EncryptionModule />} />
-              <Route path="decrypt" element={<DecryptionModule />} />
-              <Route path="integrity" element={<IntegrityVerification />} />
+              {/* ── Faculty-only routes ─────────────────────────────────── */}
+              <Route
+                path="question-papers/faculty"
+                element={<RoleRoute roles={['faculty', 'admin']}><FacultyPaperManager /></RoleRoute>}
+              />
+              <Route
+                path="question-papers/create"
+                element={<RoleRoute roles={['faculty']}><CreateQuestionPaperWizard /></RoleRoute>}
+              />
+
+              {/* ── Student-only routes ─────────────────────────────────── */}
+              <Route
+                path="question-papers/student"
+                element={<RoleRoute roles={['student']}><StudentExamDashboard /></RoleRoute>}
+              />
+              <Route
+                path="question-papers/viewer/:id"
+                element={<RoleRoute roles={['student']}><SecurePaperViewer /></RoleRoute>}
+              />
+
+              {/* ── Admin-only routes ───────────────────────────────────── */}
+              <Route
+                path="question-papers/admin-policy"
+                element={<RoleRoute roles={['admin']}><AdminCryptoPolicy /></RoleRoute>}
+              />
+
+              {/* ── Shared Crypto Engine Tools (all authenticated roles) ─ */}
+              <Route path="dashboard"   element={<Dashboard />} />
+              <Route path="upload"      element={<UploadModule />} />
+              <Route path="encrypt"     element={<EncryptionModule />} />
+              <Route path="decrypt"     element={<DecryptionModule />} />
+              <Route path="integrity"   element={<IntegrityVerification />} />
               <Route path="performance" element={<PerformanceAnalysis />} />
-              <Route path="history" element={<FileHistory />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="profile" element={<ProfilePage />} />
+              <Route path="history"     element={<FileHistory />} />
+              <Route path="settings"    element={<SettingsPage />} />
+              <Route path="profile"     element={<ProfilePage />} />
             </Route>
 
             {/* Catch-all Fallback */}
-            <Route path="*" element={<Navigate to="/question-papers/faculty" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Router>
       </AuthProvider>

@@ -14,7 +14,7 @@ import {
   FiArrowRight,
   FiZap
 } from 'react-icons/fi';
-import { cryptoPolicyService, auditService } from '../../services/api';
+import { cryptoPolicyService, auditService, adminService } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import StatCard from '../../components/StatCard';
 
@@ -25,6 +25,9 @@ export default function AdminCryptoPolicy() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [migrating, setMigrating] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminExams, setAdminExams] = useState([]);
+  const [adminPapers, setAdminPapers] = useState([]);
 
   // Filters
   const [roleFilter, setRoleFilter] = useState('ALL');
@@ -37,17 +40,23 @@ export default function AdminCryptoPolicy() {
 
   const fetchAdminData = async () => {
     try {
-      const [profilesRes, metricsRes, logsRes] = await Promise.all([
+      const [profilesRes, metricsRes, logsRes, usersRes, examsRes, papersRes] = await Promise.all([
         cryptoPolicyService.getProfiles(),
         cryptoPolicyService.getSecurityMetrics(),
         auditService.getAuditLogs({
           role: roleFilter !== 'ALL' ? roleFilter : undefined,
           severity: severityFilter !== 'ALL' ? severityFilter : undefined
-        })
+        }),
+        adminService.getUsers(),
+        adminService.getExaminations(),
+        adminService.getQuestionPapers()
       ]);
       setProfiles(profilesRes.data);
       setMetrics(metricsRes.data);
       setAuditLogs(logsRes.data);
+      setAdminUsers(usersRes.data || []);
+      setAdminExams(examsRes.data || []);
+      setAdminPapers(papersRes.data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -344,6 +353,103 @@ export default function AdminCryptoPolicy() {
           </table>
         </div>
       </div>
+
+      {/* ── Admin: Registered Users Roster ─────────────────────────────────── */}
+      <div className="card p-0 overflow-hidden">
+        <div className="card-header px-5 py-4">
+          <h2 className="text-base font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <FiKey className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            Registered Users ({adminUsers.length})
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Read-only user roster for administrative monitoring</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b text-[11px] font-bold uppercase tracking-wider text-slate-400" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-surface)' }}>
+                <th className="px-4 py-3">Username</th>
+                <th className="px-4 py-3">Full Name</th>
+                <th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">ID</th>
+                <th className="px-4 py-3">Department</th>
+                <th className="px-4 py-3">Section / Designation</th>
+                <th className="px-4 py-3">Email</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y" style={{ borderColor: 'var(--border-subtle)' }}>
+              {adminUsers.map((u) => (
+                <tr key={u.id} className="text-xs hover:bg-slate-800/30 transition-colors">
+                  <td className="px-4 py-3 font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{u.username}</td>
+                  <td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{u.full_name || '—'}</td>
+                  <td className="px-4 py-3">
+                    <span className={`badge text-[10px] font-bold ${
+                      u.role === 'admin' ? 'badge-error' : u.role === 'faculty' ? 'badge-blue' : 'badge-success'
+                    }`}>{u.role?.toUpperCase()}</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-slate-400">{u.student_id || u.faculty_id || '—'}</td>
+                  <td className="px-4 py-3 text-slate-400">{u.department || '—'}</td>
+                  <td className="px-4 py-3 text-slate-400">{u.section || u.designation || '—'}</td>
+                  <td className="px-4 py-3 text-slate-400">{u.email}</td>
+                </tr>
+              ))}
+              {adminUsers.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No users loaded.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Admin: Question Paper Metadata Monitor ──────────────────────────── */}
+      <div className="card p-0 overflow-hidden">
+        <div className="card-header px-5 py-4">
+          <h2 className="text-base font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <FiLock className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            Question Paper Metadata ({adminPapers.length})
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Administrative metadata view. Actual plaintext question paper content is NOT accessible to admin (role-restricted).
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b text-[11px] font-bold uppercase tracking-wider text-slate-400" style={{ borderColor: 'var(--border-subtle)', backgroundColor: 'var(--bg-surface)' }}>
+                <th className="px-4 py-3">Paper ID</th>
+                <th className="px-4 py-3">Subject</th>
+                <th className="px-4 py-3">Target</th>
+                <th className="px-4 py-3">Faculty</th>
+                <th className="px-4 py-3">Algorithm</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Release At</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y" style={{ borderColor: 'var(--border-subtle)' }}>
+              {adminPapers.map((p) => (
+                <tr key={p.id} className="text-xs hover:bg-slate-800/30 transition-colors">
+                  <td className="px-4 py-3 font-mono text-blue-400">{p.id}</td>
+                  <td className="px-4 py-3 font-semibold" style={{ color: 'var(--text-primary)' }}>{p.original_filename}</td>
+                  <td className="px-4 py-3 text-slate-400">{p.department || '—'} {p.section || ''}</td>
+                  <td className="px-4 py-3 text-slate-400">{p.faculty_name || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-[10px] text-indigo-400">{p.algorithm_profile_id}</td>
+                  <td className="px-4 py-3">
+                    <span className={`badge text-[10px] font-bold ${
+                      p.status === 'RELEASED' ? 'badge-success' : p.status === 'SCHEDULED' ? 'badge-blue' : 'badge-neutral'
+                    }`}>{p.status}</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-[10px] text-slate-400">
+                    {p.release_at ? new Date(p.release_at).toLocaleString() : '—'}
+                  </td>
+                </tr>
+              ))}
+              {adminPapers.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No question papers loaded.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
+

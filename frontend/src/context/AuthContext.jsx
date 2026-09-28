@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { authService } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -20,54 +20,47 @@ export const AuthProvider = ({ children }) => {
     }, 4000);
   };
 
+  const _persistSession = (tokenVal, userVal) => {
+    setToken(tokenVal);
+    setUser(userVal);
+    localStorage.setItem('crypto_auth_token', tokenVal);
+    localStorage.setItem('crypto_user', JSON.stringify(userVal));
+  };
+
   const login = async (email, password) => {
     setLoading(true);
     try {
       const response = await authService.login(email, password);
-      const { token, user } = response.data;
-      setToken(token);
-      setUser(user);
-      localStorage.setItem('crypto_auth_token', token);
-      localStorage.setItem('crypto_user', JSON.stringify(user));
-      addToast(`Logged in as ${user.username} (${user.role.toUpperCase()})`, 'success');
-      return true;
+      const { token: tok, user: u } = response.data;
+      _persistSession(tok, u);
+      const roleLabel = u.role === 'student'
+        ? `${u.full_name || u.username} · ${u.section || u.department || 'STUDENT'}`
+        : u.role === 'faculty'
+        ? `${u.full_name || u.username} · ${u.department || 'FACULTY'}`
+        : `${u.full_name || u.username} · ADMIN`;
+      addToast(`Signed in as ${roleLabel}`, 'success');
+      return { success: true, role: u.role };
     } catch (err) {
-      const msg = err.response?.data?.error || 'Login failed. Check server connection.';
+      const msg = err.response?.data?.error || 'Login failed. Check credentials.';
       addToast(msg, 'error');
-      return false;
+      return { success: false };
     } finally {
       setLoading(false);
     }
   };
 
-  const quickSwitchRole = async (targetRole) => {
-    const roleCredentials = {
-      faculty: { email: 'faculty@university.edu', pass: 'Faculty123!' },
-      student: { email: 'student@university.edu', pass: 'Student123!' },
-      admin: { email: 'admin@cybersecurity.com', pass: 'Admin123!' }
-    };
-    const creds = roleCredentials[targetRole.toLowerCase()];
-    if (creds) {
-      return await login(creds.email, creds.pass);
-    }
-    return false;
-  };
-
-  const register = async (username, email, password, role = 'student') => {
+  const register = async (payload) => {
     setLoading(true);
     try {
-      const response = await authService.register(username, email, password, role);
-      const { token, user } = response.data;
-      setToken(token);
-      setUser(user);
-      localStorage.setItem('crypto_auth_token', token);
-      localStorage.setItem('crypto_user', JSON.stringify(user));
+      const response = await authService.register(payload);
+      const { token: tok, user: u } = response.data;
+      _persistSession(tok, u);
       addToast('Account created successfully!', 'success');
-      return true;
+      return { success: true, role: u.role };
     } catch (err) {
       const msg = err.response?.data?.error || 'Registration failed.';
       addToast(msg, 'error');
-      return false;
+      return { success: false };
     } finally {
       setLoading(false);
     }
@@ -76,9 +69,16 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     setToken(null);
     setUser(null);
+    // Clear all cached exam/paper state
     localStorage.removeItem('crypto_auth_token');
     localStorage.removeItem('crypto_user');
-    addToast('Logged out successfully.', 'info');
+    // Clear any cached viewer / exam state keys
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith('paper_') || k.startsWith('exam_') || k.startsWith('viewer_')) {
+        localStorage.removeItem(k);
+      }
+    });
+    addToast('Signed out successfully.', 'info');
   };
 
   const updateUserSettings = async (newSettings) => {
@@ -100,8 +100,10 @@ export const AuthProvider = ({ children }) => {
         token,
         loading,
         isAuthenticated: !!token,
+        isStudent: user?.role === 'student',
+        isFaculty: user?.role === 'faculty',
+        isAdmin: user?.role === 'admin',
         login,
-        quickSwitchRole,
         register,
         logout,
         updateUserSettings,

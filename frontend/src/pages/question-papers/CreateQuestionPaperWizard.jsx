@@ -13,26 +13,45 @@ import {
   FiKey,
   FiCopy
 } from 'react-icons/fi';
-import { examService, questionPaperService, cryptoPolicyService } from '../../services/api';
+import { examService, questionPaperService, cryptoPolicyService, departmentService } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { 
+  formatIST, 
+  formatDateIST, 
+  formatUTC, 
+  formatExamWindowIST, 
+  istToOffsetIso, 
+  getIST24h 
+} from '../../utils/timeFormat';
 
 export default function CreateQuestionPaperWizard() {
   const { addToast } = useAuth();
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
 
-  // Step 1: Exam Details
+  // Step 1: Exam Details (Entered in Asia/Kolkata - IST)
   const [existingExams, setExistingExams] = useState([]);
   const [selectedExamId, setSelectedExamId] = useState('NEW');
-  const [examName, setExamName] = useState('Mid-Term Examination');
-  const [courseCode, setCourseCode] = useState('CS-804');
-  const [courseName, setCourseName] = useState('Cryptography and Cryptanalysis');
-  const [section, setSection] = useState('A');
-  const [semester, setSemester] = useState('Fall 2026');
+  const [examName, setExamName] = useState('Final Semester Examination');
+  const [courseCode, setCourseCode] = useState('CS-702');
+  const [courseName, setCourseName] = useState('Advanced Computer Networks');
+  const [section, setSection] = useState('CSE-A');
+  const [semester, setSemester] = useState('1');
   const [examDate, setExamDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [examStartTime, setExamStartTime] = useState('10:00');
-  const [durationMinutes, setDurationMinutes] = useState(90);
+  const [examStartTime, setExamStartTime] = useState('09:55');
+  const [examEndTime, setExamEndTime] = useState('11:00');
+  const [durationMinutes, setDurationMinutes] = useState(65);
   const [distributionMode, setDistributionMode] = useState('MODE_A');
+
+  // Target audience
+  const [departments, setDepartments] = useState([]);
+  const [availableSections, setAvailableSections] = useState([]);
+  const [targetDepartment, setTargetDepartment] = useState('CSE');
+  const [targetSection, setTargetSection] = useState('CSE-A');
+  const [targetYear, setTargetYear] = useState('3');
+  const [targetSemester, setTargetSemester] = useState('1');
+  const [eligibleCount, setEligibleCount] = useState(null);
+  const [fetchingEligible, setFetchingEligible] = useState(false);
 
   // Step 2: Upload File
   const [file, setFile] = useState(null);
@@ -43,10 +62,22 @@ export default function CreateQuestionPaperWizard() {
   const [profiles, setProfiles] = useState([]);
   const [selectedProfileId, setSelectedProfileId] = useState('AES256-GCM-RSA3072-SHA256');
 
-  // Step 4 & 5: Encryption & Schedule
-  const [releaseTime, setReleaseTime] = useState('09:55');
+  // Step 4 & 5: Encryption & Schedule (IST)
+  const [releaseTime, setReleaseTime] = useState('09:50');
   const [encrypting, setEncrypting] = useState(false);
   const [createdPaperResult, setCreatedPaperResult] = useState(null);
+
+  const calculateEndTime = (startStr, durationMin) => {
+    try {
+      const [h, m] = startStr.split(':').map(Number);
+      const totalMin = h * 60 + m + Number(durationMin);
+      const endH = Math.floor(totalMin / 60) % 24;
+      const endM = totalMin % 60;
+      return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+    } catch (e) {
+      return '11:00';
+    }
+  };
 
   useEffect(() => {
     fetchInitialData();
@@ -54,26 +85,65 @@ export default function CreateQuestionPaperWizard() {
 
   const fetchInitialData = async () => {
     try {
-      const [examsRes, profilesRes] = await Promise.all([
+      const [examsRes, profilesRes, deptRes] = await Promise.all([
         examService.getFacultyExams(),
-        cryptoPolicyService.getProfiles()
+        cryptoPolicyService.getProfiles(),
+        departmentService.getDepartments()
       ]);
       setExistingExams(examsRes.data);
       if (examsRes.data.length > 0) {
         setSelectedExamId(examsRes.data[0].id);
+        handleExamSelection(examsRes.data[0].id, examsRes.data);
       }
       setProfiles(profilesRes.data);
       const def = profilesRes.data.find(p => p.is_default);
       if (def) setSelectedProfileId(def.id);
+      setDepartments(deptRes.data.departments || []);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleExamSelection = (examId) => {
+  // When department changes, update sections
+  useEffect(() => {
+    const dept = departments.find(d => d.code === targetDepartment);
+    const secs = dept?.sections || [];
+    setAvailableSections(secs);
+    if (!secs.includes(targetSection) && secs.length > 0) {
+      setTargetSection(secs[0]);
+    }
+    setEligibleCount(null);
+  }, [targetDepartment, departments]);
+
+  // Live eligible student count
+  const fetchEligibleCount = async () => {
+    if (!targetDepartment || !targetSection) return;
+    setFetchingEligible(true);
+    try {
+      const res = await departmentService.getEligibleStudents({
+        department: targetDepartment,
+        section: targetSection,
+        year: targetYear,
+        semester: targetSemester
+      });
+      setEligibleCount(res.data.count);
+    } catch (e) {
+      setEligibleCount(0);
+    } finally {
+      setFetchingEligible(false);
+    }
+  };
+
+  // Auto-fetch when target params change
+  useEffect(() => {
+    if (targetDepartment && targetSection) fetchEligibleCount();
+    else setEligibleCount(null);
+  }, [targetDepartment, targetSection, targetYear, targetSemester]);
+
+  const handleExamSelection = (examId, examList = existingExams) => {
     setSelectedExamId(examId);
     if (examId !== 'NEW') {
-      const ex = existingExams.find(e => e.id === examId);
+      const ex = examList.find(e => e.id === examId);
       if (ex) {
         setCourseName(ex.course_name);
         setCourseCode(ex.course_id);
@@ -81,6 +151,21 @@ export default function CreateQuestionPaperWizard() {
         setSection(ex.section);
         setSemester(ex.semester);
         setExamDate(ex.exam_date);
+        if (ex.department) setTargetDepartment(ex.department);
+        if (ex.section) setTargetSection(ex.section);
+        if (ex.year) setTargetYear(ex.year);
+        if (ex.semester) setTargetSemester(ex.semester);
+        if (ex.duration_minutes) setDurationMinutes(ex.duration_minutes);
+        
+        if (ex.exam_start_at) {
+          const s24 = getIST24h(ex.exam_start_at);
+          setExamStartTime(s24);
+          if (ex.exam_end_at) {
+            setExamEndTime(getIST24h(ex.exam_end_at));
+          } else {
+            setExamEndTime(calculateEndTime(s24, ex.duration_minutes || 65));
+          }
+        }
       }
     }
   };
@@ -100,23 +185,48 @@ export default function CreateQuestionPaperWizard() {
       return;
     }
 
+    if (examStartTime >= examEndTime) {
+      addToast(`Invalid Schedule: Exam start time (${examStartTime} IST) must be strictly before exam end time (${examEndTime} IST).`, 'error');
+      return;
+    }
+
     setUploading(true);
     try {
       let activeExamId = selectedExamId;
+      const startIso = istToOffsetIso(examDate, examStartTime);
+      const endIso = istToOffsetIso(examDate, examEndTime);
+
       if (selectedExamId === 'NEW') {
-        const startIso = `${examDate}T${examStartTime}:00Z`;
         const newExamRes = await examService.createExam({
           course_id: courseCode,
           course_name: courseName,
           subject: examName,
-          section,
-          semester,
+          section: targetSection || section,
+          semester: targetSemester || semester,
+          department: targetDepartment,
+          year: targetYear,
           exam_date: examDate,
           exam_start_at: startIso,
+          exam_end_at: endIso,
           duration_minutes: durationMinutes
         });
         activeExamId = newExamRes.data.exam.id;
         setSelectedExamId(activeExamId);
+      } else {
+        // Update existing exam schedule and criteria to keep in sync
+        await examService.updateExam(selectedExamId, {
+          course_id: courseCode,
+          course_name: courseName,
+          subject: examName,
+          section: targetSection || section,
+          semester: targetSemester || semester,
+          department: targetDepartment,
+          year: targetYear,
+          exam_date: examDate,
+          exam_start_at: startIso,
+          exam_end_at: endIso,
+          duration_minutes: durationMinutes
+        });
       }
 
       const formData = new FormData();
@@ -140,17 +250,35 @@ export default function CreateQuestionPaperWizard() {
   // Step 5: Execute Hybrid Encryption & Scheduling
   const handleEncryptAndSchedule = async () => {
     if (!uploadDraftData) return;
+    
+    // Strict Validation (Requirement 75 & 77)
+    if (releaseTime >= examStartTime) {
+      addToast(`Invalid Schedule: Scheduled release time (${releaseTime} IST) must be strictly before exam start time (${examStartTime} IST).`, 'error');
+      return;
+    }
+    
+    if (examStartTime >= examEndTime) {
+      addToast(`Invalid Schedule: Exam start time (${examStartTime} IST) must be strictly before exam end time (${examEndTime} IST).`, 'error');
+      return;
+    }
+
     setEncrypting(true);
 
     try {
-      const releaseIso = `${examDate}T${releaseTime}:00Z`;
+      const releaseIso = istToOffsetIso(examDate, releaseTime);
+      const startIso = istToOffsetIso(examDate, examStartTime);
+      const endIso = istToOffsetIso(examDate, examEndTime);
+      
       const payload = {
         temp_token: uploadDraftData.temp_token,
         exam_id: uploadDraftData.exam_id,
         original_filename: uploadDraftData.original_filename,
         algorithm_profile_id: selectedProfileId,
         distribution_mode: distributionMode,
-        release_at: releaseIso
+        release_at: releaseIso,
+        exam_start_at: startIso,
+        expires_at: endIso,
+        duration_minutes: durationMinutes
       };
 
       const res = await questionPaperService.encryptAndSchedule(payload);
@@ -272,28 +400,69 @@ export default function CreateQuestionPaperWizard() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                  Section
-                </label>
-                <input
-                  type="text"
-                  value={section}
-                  onChange={(e) => setSection(e.target.value)}
-                  className="glass-input text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                  Semester
-                </label>
-                <input
-                  type="text"
-                  value={semester}
-                  onChange={(e) => setSemester(e.target.value)}
-                  className="glass-input text-sm"
-                />
+            {/* ── Target Audience ──────────────────────────────────── */}
+            <div className="col-span-full">
+              <div className="p-4 rounded-xl border border-blue-500/30 space-y-4" style={{ backgroundColor: 'var(--bg-input)' }}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-blue-400">Target Audience</span>
+                  {eligibleCount !== null && (
+                    <span className="badge badge-success text-xs font-bold">
+                      {fetchingEligible ? '…' : `${eligibleCount} Eligible Students`}
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Department</label>
+                    <select
+                      value={targetDepartment}
+                      onChange={(e) => setTargetDepartment(e.target.value)}
+                      className="glass-input text-sm"
+                    >
+                      <option value="">Dept…</option>
+                      {departments.map(d => (
+                        <option key={d.code} value={d.code}>{d.code}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Section</label>
+                    <select
+                      value={targetSection}
+                      onChange={(e) => setTargetSection(e.target.value)}
+                      className="glass-input text-sm"
+                      disabled={!targetDepartment}
+                    >
+                      <option value="">Sec…</option>
+                      {availableSections.map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Year</label>
+                    <select
+                      value={targetYear}
+                      onChange={(e) => setTargetYear(e.target.value)}
+                      className="glass-input text-sm"
+                    >
+                      {['1','2','3','4'].map(y => <option key={y} value={y}>Year {y}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Semester</label>
+                    <select
+                      value={targetSemester}
+                      onChange={(e) => setTargetSemester(e.target.value)}
+                      className="glass-input text-sm"
+                    >
+                      {['1','2'].map(s => <option key={s} value={s}>Sem {s}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {eligibleCount === 0 && (
+                  <p className="text-xs text-amber-400">⚠ No registered students match this target audience.</p>
+                )}
               </div>
             </div>
 
@@ -309,29 +478,68 @@ export default function CreateQuestionPaperWizard() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                  Exam Start Time
-                </label>
-                <input
-                  type="time"
-                  value={examStartTime}
-                  onChange={(e) => setExamStartTime(e.target.value)}
-                  className="glass-input text-sm"
-                />
+            <div className="col-span-full p-4 rounded-xl border border-slate-700/50 space-y-3" style={{ backgroundColor: 'var(--bg-input)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-blue-400">Exam Window & Timings (Asia/Kolkata - IST)</span>
+                <span className="text-xs font-mono font-semibold text-emerald-400">
+                  {examStartTime} – {examEndTime} IST ({durationMinutes} mins)
+                </span>
               </div>
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                  Duration (Mins)
-                </label>
-                <input
-                  type="number"
-                  value={durationMinutes}
-                  onChange={(e) => setDurationMinutes(e.target.value)}
-                  className="glass-input text-sm"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                    Start Time (IST)
+                  </label>
+                  <input
+                    type="time"
+                    value={examStartTime}
+                    onChange={(e) => {
+                      setExamStartTime(e.target.value);
+                      setExamEndTime(calculateEndTime(e.target.value, durationMinutes));
+                    }}
+                    className="glass-input text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 font-mono">
+                    Stored UTC: {formatUTC(istToOffsetIso(examDate, examStartTime))}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                    End Time (IST)
+                  </label>
+                  <input
+                    type="time"
+                    value={examEndTime}
+                    onChange={(e) => setExamEndTime(e.target.value)}
+                    className="glass-input text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 font-mono">
+                    Stored UTC: {formatUTC(istToOffsetIso(examDate, examEndTime))}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                    Duration (Minutes)
+                  </label>
+                  <input
+                    type="number"
+                    value={durationMinutes}
+                    min={15}
+                    max={360}
+                    onChange={(e) => {
+                      const dur = e.target.value;
+                      setDurationMinutes(dur);
+                      setExamEndTime(calculateEndTime(examStartTime, dur));
+                    }}
+                    className="glass-input text-sm"
+                  />
+                </div>
               </div>
+              {examStartTime >= examEndTime && (
+                <p className="text-xs text-red-400 font-semibold">
+                  ⚠ Invalid Schedule: Start time ({examStartTime}) must be strictly before end time ({examEndTime}).
+                </p>
+              )}
             </div>
           </div>
 
@@ -604,39 +812,57 @@ export default function CreateQuestionPaperWizard() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                Scheduled Release Time (Server UTC)
+                Scheduled Release Time (Asia/Kolkata - IST)
               </label>
               <input
                 type="time"
                 value={releaseTime}
                 onChange={(e) => setReleaseTime(e.target.value)}
-                className="glass-input text-sm font-mono-code"
+                className="glass-input text-sm font-mono font-bold"
               />
-              <p className="text-xs text-amber-500 mt-1.5 flex items-center gap-1">
-                <FiInfo className="w-3.5 h-3.5 flex-shrink-0" />
-                <span>Typically scheduled 5–10 minutes before examination start.</span>
-              </p>
+              <div className="mt-2 space-y-1 text-xs">
+                <p className="font-semibold text-emerald-400 flex items-center gap-1">
+                  <FiClock className="w-3.5 h-3.5" />
+                  <span>Release: {formatIST(istToOffsetIso(examDate, releaseTime))}</span>
+                </p>
+                <p className="font-mono text-[11px] text-slate-400">
+                  Authoritative Stored UTC: {formatUTC(istToOffsetIso(examDate, releaseTime))}
+                </p>
+              </div>
+              {releaseTime >= examStartTime && (
+                <p className="text-xs text-red-400 font-semibold mt-2">
+                  ⚠ Release time must be strictly before exam start time ({examStartTime} IST).
+                </p>
+              )}
             </div>
 
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                Examination Start Reference
+                Examination Start Reference (IST)
               </label>
               <div 
-                className="p-3.5 rounded-lg border text-xs space-y-1"
+                className="p-3.5 rounded-lg border text-xs space-y-2"
                 style={{ backgroundColor: 'var(--bg-input)', borderColor: 'var(--border-subtle)' }}
               >
                 <div className="flex justify-between">
                   <span style={{ color: 'var(--text-muted)' }}>Date:</span>
-                  <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{examDate}</span>
+                  <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{formatDateIST(istToOffsetIso(examDate, examStartTime))}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span style={{ color: 'var(--text-muted)' }}>Exam Start:</span>
-                  <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{examStartTime}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Exam Window:</span>
+                  <span className="font-semibold text-blue-400 font-mono">
+                    {formatExamWindowIST(istToOffsetIso(examDate, examStartTime), istToOffsetIso(examDate, examEndTime))}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span style={{ color: 'var(--text-muted)' }}>Release Window:</span>
-                  <span className="font-semibold text-emerald-500">{releaseTime} &rarr; {examStartTime}</span>
+                  <span className="font-semibold text-emerald-400 font-mono">
+                    {releaseTime} &rarr; {examStartTime} IST
+                  </span>
+                </div>
+                <div className="flex justify-between border-t pt-1.5 text-[11px] text-slate-400 font-mono" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <span>UTC Reference:</span>
+                  <span>{formatUTC(istToOffsetIso(examDate, examStartTime))} – {formatUTC(istToOffsetIso(examDate, examEndTime))}</span>
                 </div>
               </div>
             </div>
