@@ -7,7 +7,6 @@ from models.encrypted_key import EncryptedKey
 from models.release_token import ReleaseToken
 from models.audit_log import AuditLog
 from models.file_vault import UploadedFile, CryptoOperationHistory
-
 __all__ = [
     'User',
     'AlgorithmProfile',
