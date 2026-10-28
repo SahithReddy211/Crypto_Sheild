@@ -61,6 +61,13 @@ def create_app():
     try:
         with app.app_context():
             seed_database(app)
+            # Ensure encrypted_payload_b64 column exists on existing databases
+            try:
+                from sqlalchemy import text
+                db.session.execute(text("ALTER TABLE question_papers ADD COLUMN encrypted_payload_b64 TEXT"))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
     except Exception as e:
         print(f"[Server Init] Database seed notice: {e}")
         
@@ -72,11 +79,13 @@ def create_app():
     
     @app.route('/', methods=['GET'])
     def root():
+        db_type = 'postgresql' if 'postgresql' in app.config.get('SQLALCHEMY_DATABASE_URI', '') else 'sqlite'
         return jsonify({
             'status': 'online',
             'service': 'Crypto-Agility Secure Question Paper Distribution System API',
             'version': '2.0.0',
             'environment': 'serverless' if IS_SERVERLESS else 'standard',
+            'database': db_type,
             'endpoints': {
                 'health': '/api/health',
                 'login': '/api/auth/login'
@@ -85,11 +94,13 @@ def create_app():
 
     @app.route('/api/health', methods=['GET'])
     def health():
+        db_type = 'postgresql' if 'postgresql' in app.config.get('SQLALCHEMY_DATABASE_URI', '') else 'sqlite'
         return jsonify({
             'status': 'healthy',
             'service': 'Crypto-Agility Secure Question Paper Distribution System',
             'version': '2.0.0',
-            'serverless': IS_SERVERLESS
+            'serverless': IS_SERVERLESS,
+            'database': db_type
         }), 200
 
     @app.after_request

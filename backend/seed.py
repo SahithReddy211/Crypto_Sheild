@@ -1,4 +1,5 @@
 import os
+import base64
 import secrets
 from datetime import datetime, timezone, timedelta
 from database.db import db
@@ -53,6 +54,12 @@ def create_sample_pdf(title, question_lines):
 def seed_database(app):
     with app.app_context():
         db.create_all()
+        try:
+            from sqlalchemy import text
+            db.session.execute(text("ALTER TABLE question_papers ADD COLUMN encrypted_payload_b64 TEXT"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         
         # 1. Seed Algorithm Profiles
         if not AlgorithmProfile.query.first():
@@ -282,7 +289,8 @@ def seed_database(app):
                 expires_at=now_utc + timedelta(minutes=120),
                 digital_signature=enc_res['digital_signature'],
                 iv_nonce=enc_res['iv_b64'],
-                auth_tag=enc_res['auth_tag_b64']
+                auth_tag=enc_res['auth_tag_b64'],
+                encrypted_payload_b64=base64.b64encode(enc_res['ciphertext']).decode('utf-8')
             )
             db.session.add(qp1)
             
@@ -333,7 +341,8 @@ def seed_database(app):
                 expires_at=now_utc + timedelta(minutes=120),
                 digital_signature=enc_res2['digital_signature'],
                 iv_nonce=enc_res2['iv_b64'],
-                auth_tag=enc_res2['auth_tag_b64']
+                auth_tag=enc_res2['auth_tag_b64'],
+                encrypted_payload_b64=base64.b64encode(enc_res2['ciphertext']).decode('utf-8')
             )
             db.session.add(qp2)
             

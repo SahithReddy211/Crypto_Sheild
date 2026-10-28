@@ -235,13 +235,23 @@ class KeyReleaseService:
             )
             return {'success': False, 'error': release_reason, 'status_code': 403}
             
-        # 3. Read encrypted payload from storage
-        enc_file_path = os.path.join(Config.ENCRYPTED_FOLDER, paper.encrypted_filename)
-        if not os.path.exists(enc_file_path):
+        # 3. Read encrypted payload from database or storage
+        import base64
+        ciphertext = None
+        if paper.encrypted_payload_b64:
+            try:
+                ciphertext = base64.b64decode(paper.encrypted_payload_b64)
+            except Exception as e:
+                print(f"[KeyRelease] Error decoding in-db ciphertext: {e}")
+                
+        if ciphertext is None:
+            enc_file_path = os.path.join(Config.ENCRYPTED_FOLDER, paper.encrypted_filename)
+            if os.path.exists(enc_file_path):
+                with open(enc_file_path, 'rb') as f:
+                    ciphertext = f.read()
+                    
+        if not ciphertext:
             return {'success': False, 'error': 'ENCRYPTED_FILE_NOT_FOUND', 'status_code': 404}
-            
-        with open(enc_file_path, 'rb') as f:
-            ciphertext = f.read()
             
         # 4. Retrieve wrapped DEK
         key_record = EncryptedKey.query.filter_by(question_paper_id=paper_id, status='ACTIVE').first()

@@ -6,6 +6,7 @@ from flask import Blueprint, request, jsonify, send_file, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from werkzeug.utils import secure_filename
 import io
+import base64
 
 from database.db import db
 from models.user import User
@@ -454,7 +455,8 @@ def encrypt_and_schedule_paper():
         expires_at=expires_at,
         digital_signature=enc_output['digital_signature'],
         iv_nonce=enc_output['iv_b64'],
-        auth_tag=enc_output['auth_tag_b64']
+        auth_tag=enc_output['auth_tag_b64'],
+        encrypted_payload_b64=base64.b64encode(enc_output['ciphertext']).decode('utf-8')
     )
     db.session.add(paper)
     
@@ -931,13 +933,17 @@ def download_encrypted_package(paper_id):
     if not is_auth:
         return jsonify({'error': 'Unauthorized'}), 403
         
-    enc_path = os.path.join(Config.ENCRYPTED_FOLDER, paper.encrypted_filename)
-    if not os.path.exists(enc_path):
+    ciphertext_bytes = None
+    if paper.encrypted_payload_b64:
+        ciphertext_bytes = base64.b64decode(paper.encrypted_payload_b64)
+    else:
+        enc_path = os.path.join(Config.ENCRYPTED_FOLDER, paper.encrypted_filename)
+        if os.path.exists(enc_path):
+            with open(enc_path, 'rb') as f:
+                ciphertext_bytes = f.read()
+                
+    if ciphertext_bytes is None:
         return jsonify({'error': 'Encrypted file not found'}), 404
-        
-    import base64
-    with open(enc_path, 'rb') as f:
-        ciphertext_bytes = f.read()
         
     # Get Wrapped DEK
     enc_key = EncryptedKey.query.filter_by(question_paper_id=paper_id, status='ACTIVE').first()

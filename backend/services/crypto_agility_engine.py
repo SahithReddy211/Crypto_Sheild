@@ -11,6 +11,19 @@ from Crypto.Hash import SHA256, SHA384, SHA512
 from Crypto.Random import get_random_bytes
 from config import Config
 
+class _DeterministicPRNG:
+    def __init__(self, seed: bytes):
+        self.state = seed
+        self.counter = 0
+
+    def __call__(self, n: int) -> bytes:
+        out = bytearray()
+        while len(out) < n:
+            h = hashlib.sha512(self.state + self.counter.to_bytes(8, 'big')).digest()
+            out.extend(h)
+            self.counter += 1
+        return bytes(out[:n])
+
 class CryptoAgilityEngine:
     def __init__(self):
         self.key_store_dir = Config.KEY_STORE_FOLDER
@@ -23,13 +36,15 @@ class CryptoAgilityEngine:
         self._ensure_master_keys()
 
     def _ensure_master_keys(self):
-        """Ensure RSA-3072 Master KEK and RSA-3072 Signing keys exist on server"""
+        """Ensure RSA-3072 Master KEK and RSA-3072 Signing keys exist on server deterministically"""
+        seed_kek = Config.SECRET_KEY.encode('utf-8') + b':master_kek_3072'
+        seed_sig = Config.SECRET_KEY.encode('utf-8') + b':server_sign_3072'
         try:
             # Master KEK (RSA-3072)
             kek_priv_path = os.path.join(self.key_store_dir, 'master_kek_3072.pem')
             kek_pub_path = os.path.join(self.key_store_dir, 'master_kek_3072.pub')
             if not os.path.exists(kek_priv_path) or not os.path.exists(kek_pub_path):
-                key = RSA.generate(3072)
+                key = RSA.generate(3072, randfunc=_DeterministicPRNG(seed_kek))
                 self._in_memory_keys['kek'] = key
                 try:
                     with open(kek_priv_path, 'wb') as f:
@@ -43,7 +58,7 @@ class CryptoAgilityEngine:
             sig_priv_path = os.path.join(self.key_store_dir, 'server_sign_3072.pem')
             sig_pub_path = os.path.join(self.key_store_dir, 'server_sign_3072.pub')
             if not os.path.exists(sig_priv_path) or not os.path.exists(sig_pub_path):
-                key = RSA.generate(3072)
+                key = RSA.generate(3072, randfunc=_DeterministicPRNG(seed_sig))
                 self._in_memory_keys['sig'] = key
                 try:
                     with open(sig_priv_path, 'wb') as f:
@@ -53,11 +68,11 @@ class CryptoAgilityEngine:
                 except Exception as e:
                     print(f"[CryptoEngine] Notice saving Signing key to disk: {e}")
         except Exception as e:
-            print(f"[CryptoEngine] Generating in-memory keys: {e}")
+            print(f"[CryptoEngine] Generating in-memory keys deterministically: {e}")
             if 'kek' not in self._in_memory_keys:
-                self._in_memory_keys['kek'] = RSA.generate(3072)
+                self._in_memory_keys['kek'] = RSA.generate(3072, randfunc=_DeterministicPRNG(seed_kek))
             if 'sig' not in self._in_memory_keys:
-                self._in_memory_keys['sig'] = RSA.generate(3072)
+                self._in_memory_keys['sig'] = RSA.generate(3072, randfunc=_DeterministicPRNG(seed_sig))
 
     def get_master_kek_public(self):
         path = os.path.join(self.key_store_dir, 'master_kek_3072.pub')
