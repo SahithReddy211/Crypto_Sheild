@@ -22,8 +22,17 @@ def get_database_uri():
         os.environ.get('DATABASE_URL') or
         os.environ.get('POSTGRES_URL') or
         os.environ.get('POSTGRES_PRISMA_URL') or
-        os.environ.get('POSTGRES_URL_NON_POOLING')
+        os.environ.get('POSTGRES_URL_NON_POOLING') or
+        os.environ.get('DATABASE_URL_UNPOOLED') or
+        os.environ.get('NEON_DATABASE_URL') or
+        os.environ.get('POSTGRESQL_URL')
     )
+    if not raw_url:
+        for k, v in os.environ.items():
+            if any(term in k.upper() for term in ['POSTGRES', 'DATABASE', 'NEON']) and ('postgres://' in str(v) or 'postgresql://' in str(v)):
+                raw_url = str(v)
+                break
+
     if raw_url:
         # SQLAlchemy requires 'postgresql://' instead of 'postgres://'
         if raw_url.startswith('postgres://'):
