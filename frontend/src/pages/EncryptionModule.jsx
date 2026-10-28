@@ -11,7 +11,7 @@ import {
   FiArrowRight,
   FiCopy
 } from 'react-icons/fi';
-import { cryptoService, fileService } from '../services/api';
+import { cryptoService, fileService, SERVER_BASE_URL } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export default function EncryptionModule() {
@@ -328,7 +328,7 @@ export default function EncryptionModule() {
                 )}
 
                 <a
-                  href={`http://localhost:5000${encryptionResult.encrypted_file_url}`}
+                  href={`${SERVER_BASE_URL}${encryptionResult.encrypted_file_url}`}
                   target="_blank"
                   rel="noreferrer"
                   className="w-full btn-primary py-2.5 flex items-center justify-center gap-2 text-sm"

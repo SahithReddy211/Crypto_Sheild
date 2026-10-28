@@ -16,6 +16,11 @@ env/
 venv/
 ENV/
 
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
 # Flask / SQLite - Database files
 *.db
 *.sqlite

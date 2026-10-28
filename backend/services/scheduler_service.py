@@ -17,6 +17,10 @@ class ReleaseScheduler:
         self.start()
 
     def start(self):
+        # Do not start background polling thread on serverless environments (e.g. Vercel)
+        import os
+        if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME') or os.environ.get('SERVERLESS'):
+            return
         if not self._running:
             self._running = True
             self._thread = threading.Thread(target=self._run_loop, daemon=True)

@@ -1,6 +1,13 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+// Determine Backend Server & API Base URL
+export const SERVER_BASE_URL = import.meta.env.VITE_API_BASE_URL
+  ? import.meta.env.VITE_API_BASE_URL.replace(/\/api\/?$/, '')
+  : (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? 'http://localhost:5000'
+      : 'https://crypto-sheild-nusj.vercel.app');
+
+export const API_BASE_URL = `${SERVER_BASE_URL}/api`;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -94,7 +101,10 @@ export const questionPaperService = {
   // Student endpoints
   getStudentExams: () => api.get('/student/exams'),
   getStudentPapers: () => api.get('/student/question-papers'),
-  getPaperStatus: (id) => api.get(`/student/question-papers/${id}`),
+  getPaperStatus: (id) => api.get(`/student/question-papers/${id}/status`),
+  getPaperPageImage: (paperId, pageNumber) => api.get(`/student/question-papers/${paperId}/pages/${pageNumber}`, { responseType: 'blob' }),
+  getExamPaperStatus: (examId) => api.get(`/exams/${examId}/paper/status`),
+  getExamPaperPageImage: (examId, pageNumber) => api.get(`/exams/${examId}/paper/pages/${pageNumber}`, { responseType: 'blob' }),
   getEncryptedPackageUrl: (id) => `${API_BASE_URL}/student/question-papers/${id}/encrypted-package`,
   requestReleaseToken: (id) => api.post(`/student/question-papers/${id}/release-request`),
   decryptPaper: (id, releaseToken) => api.post(`/student/question-papers/${id}/decrypt`, { release_token: releaseToken }),

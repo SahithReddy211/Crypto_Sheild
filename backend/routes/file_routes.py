@@ -70,9 +70,22 @@ def delete_file(file_id):
 
 @file_bp.route('/download/<filename>', methods=['GET'])
 def download_file(filename):
-    # Check encrypted, upload, or temp folders
-    for folder in [Config.ENCRYPTED_FOLDER, Config.UPLOAD_FOLDER, Config.TEMP_FOLDER]:
-        target = os.path.join(folder, secure_filename(filename))
+    safe_name = secure_filename(filename)
+    # Strictly forbid downloading original PDF files and question paper files
+    if safe_name.lower().endswith('.pdf') or safe_name.startswith('qp_') or safe_name.startswith('draft_'):
+        return jsonify({
+            'error': 'ACCESS_PROHIBITED',
+            'message': 'Direct document and PDF download is prohibited by security policy.'
+        }), 403
+
+    # Check upload folder for non-PDF vault files only
+    for folder in [Config.UPLOAD_FOLDER, Config.TEMP_FOLDER]:
+        target = os.path.join(folder, safe_name)
         if os.path.exists(target):
-            return send_from_directory(folder, secure_filename(filename), as_attachment=True)
+            # Double check content does not start with PDF magic bytes
+            with open(target, 'rb') as f:
+                header = f.read(5)
+                if header.startswith(b'%PDF'):
+                    return jsonify({'error': 'PDF downloads are prohibited'}), 403
+            return send_from_directory(folder, safe_name, as_attachment=True)
     return jsonify({'error': 'File not found'}), 404

@@ -19,6 +19,7 @@ from services.crypto_agility_engine import crypto_engine
 from services.key_release_service import key_release_service, KeyReleaseService
 from services.audit_service import AuditService
 from services.scheduler_service import release_scheduler
+from services.document_renderer import DocumentRenderer, document_renderer
 from config import Config
 
 from utils.time_utils import (
@@ -652,13 +653,107 @@ def get_student_question_papers():
         
     return jsonify(res), 200
 
+# In-memory document session cache for authenticated released page rendering
+# Key: (paper_id, student_id) -> {'plaintext': bytes, 'expires_at': datetime, 'total_pages': int, 'original_filename': str}
+_decrypted_paper_cache = {}
+
+def get_decrypted_paper_for_student(paper_id, user_id, user, remote_addr):
+    """
+    Validates enrollment, release-time, decrypts paper, caches in memory for the student session,
+    and returns (plaintext_bytes, total_pages, original_filename, None) or (None, None, None, error_response).
+    The original PDF bytes are strictly kept in server memory and never delivered to the client.
+    """
+    now_utc = KeyReleaseService.get_current_server_time_utc()
+    
+    # 1. Authorize student enrollment
+    is_auth, auth_reason, paper = KeyReleaseService.authorize_student_access(user_id, paper_id)
+    if not is_auth:
+        AuditService.log(
+            action='PAGE_ACCESS_DENIED_UNAUTHORIZED',
+            user_id=user_id,
+            role='student',
+            resource_type='QUESTION_PAPER',
+            resource_id=paper_id,
+            status='DENIED',
+            severity='HIGH',
+            metadata={'reason': auth_reason},
+            ip_address=remote_addr
+        )
+        return None, None, None, (jsonify({
+            'error': auth_reason,
+            'message': 'You are not enrolled or authorized to access this examination question paper.'
+        }), 403)
+        
+    # 2. Authoritative Server-side release-time validation
+    is_allowed, release_reason = KeyReleaseService.is_release_allowed(paper, now_utc)
+    if not is_allowed:
+        AuditService.log(
+            action='EARLY_PAGE_ACCESS_DENIED',
+            user_id=user_id,
+            role='student',
+            resource_type='QUESTION_PAPER',
+            resource_id=paper_id,
+            status='DENIED',
+            severity='WARNING',
+            metadata={
+                'reason': release_reason,
+                'server_time_utc': now_utc.isoformat(),
+                'release_at_utc': paper.release_at.isoformat()
+            },
+            ip_address=remote_addr
+        )
+        return None, None, None, (jsonify({
+            'error': release_reason,
+            'message': 'Question paper will be available at the scheduled release time.' if release_reason == 'PAPER_NOT_RELEASED' else 'Question paper is not available.',
+            'release_at': paper.release_at.isoformat(),
+            'server_time': now_utc.isoformat()
+        }), 403)
+        
+    # Check cache
+    cache_key = (paper_id, user_id)
+    cache_entry = _decrypted_paper_cache.get(cache_key)
+    if cache_entry and now_utc < cache_entry['expires_at']:
+        return cache_entry['plaintext'], cache_entry['total_pages'], cache_entry['original_filename'], None
+        
+    # Decrypt server-side
+    dec_result = KeyReleaseService.decrypt_and_retrieve_paper(
+        paper_id=paper_id,
+        student_id=user_id,
+        ip_address=remote_addr
+    )
+    if not dec_result.get('success'):
+        status_code = dec_result.get('status_code', 400)
+        return None, None, None, (jsonify(dec_result), status_code)
+        
+    plaintext_bytes = dec_result['plaintext_bytes']
+    orig_name = dec_result.get('original_filename', paper.original_filename)
+    doc_info = DocumentRenderer.get_document_info(plaintext_bytes, orig_name)
+    total_pages = doc_info['total_pages']
+    
+    # Cache for 15 minutes or until exam expires
+    cache_expiry = now_utc + timedelta(minutes=15)
+    if paper.expires_at:
+        paper_exp = paper.expires_at.replace(tzinfo=timezone.utc) if paper.expires_at.tzinfo is None else paper.expires_at
+        if paper_exp < cache_expiry:
+            cache_expiry = paper_exp
+            
+    _decrypted_paper_cache[cache_key] = {
+        'plaintext': plaintext_bytes,
+        'total_pages': total_pages,
+        'original_filename': orig_name,
+        'expires_at': cache_expiry
+    }
+    
+    return plaintext_bytes, total_pages, orig_name, None
+
 @exam_bp.route('/student/question-papers/<paper_id>', methods=['GET'])
+@exam_bp.route('/student/question-papers/<paper_id>/status', methods=['GET'])
 @jwt_required()
 def get_student_question_paper_status(paper_id):
     """
-    Returns question paper status.
+    Returns question paper metadata and release status.
     Before release: returns metadata ONLY with locked status.
-    NEVER returns plaintext, DEK, or private key.
+    NEVER returns plaintext, PDF bytes, DEK, or private key.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -674,6 +769,11 @@ def get_student_question_paper_status(paper_id):
     rel_at = paper.release_at if paper.release_at.tzinfo else paper.release_at.replace(tzinfo=timezone.utc)
     is_released = now_utc >= rel_at
     
+    total_pages = 0
+    if is_released and paper.status != 'CANCELLED':
+        # Safely compute total pages without exposing PDF to client
+        _, total_pages, _, _ = get_decrypted_paper_for_student(paper_id, user_id, user, request.remote_addr)
+    
     response_data = {
         'paper_id': paper.id,
         'exam_id': paper.exam_id,
@@ -682,15 +782,138 @@ def get_student_question_paper_status(paper_id):
         'department': paper.exam.department if paper.exam else 'CSE',
         'section': paper.exam.section if paper.exam else 'CSE-A',
         'status': 'RELEASED' if is_released else 'LOCKED',
+        'is_released': is_released,
         'release_at': paper.release_at.isoformat(),
+        'release_at_utc': format_iso_utc(paper.release_at),
+        'release_at_ist': format_ist(paper.release_at),
         'server_time_utc': now_utc.isoformat(),
+        'server_time_ist': format_ist(now_utc),
         'can_decrypt': is_released and paper.status != 'CANCELLED',
+        'total_pages': total_pages or 1,
         'distribution_mode': paper.distribution_mode,
         'algorithm_profile': paper.algorithm_profile_id,
         'file_hash': paper.file_hash,
-        'digital_signature_present': bool(paper.digital_signature)
+        'digital_signature_present': bool(paper.digital_signature),
+        'student': {
+            'id': user.student_id or f"STU-{user.id:04d}",
+            'name': user.full_name or user.username,
+            'department': user.department or 'CSE',
+            'section': user.section or 'CSE-A'
+        }
     }
-    return jsonify(response_data), 200
+    resp = jsonify(response_data)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0, private'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp, 200
+
+@exam_bp.route('/student/question-papers/<paper_id>/pages/<int:page_number>', methods=['GET'])
+@jwt_required()
+def get_paper_page_image(paper_id, page_number):
+    """
+    Renders and delivers a single page image (PNG) with server-side dynamic watermark.
+    NEVER sends original PDF bytes or application/pdf.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user or user.role != 'student':
+        return jsonify({'error': 'Unauthorized: Student role required'}), 403
+        
+    paper = QuestionPaper.query.get(paper_id)
+    if not paper:
+        return jsonify({'error': 'Question paper not found'}), 404
+        
+    plaintext_bytes, total_pages, orig_name, err = get_decrypted_paper_for_student(paper_id, user_id, user, request.remote_addr)
+    if err:
+        return err
+        
+    if page_number < 1 or page_number > total_pages:
+        return jsonify({
+            'error': 'INVALID_PAGE_NUMBER',
+            'message': f'Requested page {page_number} is out of bounds (1 to {total_pages}).'
+        }), 400
+        
+    now_utc = KeyReleaseService.get_current_server_time_utc()
+    watermark_data = {
+        'student_id': user.student_id or f"STU-{user.id:04d}",
+        'student_name': user.full_name or user.username,
+        'exam_name': paper.exam.course_name if paper.exam else paper_id,
+        'timestamp': format_ist(now_utc)
+    }
+    
+    try:
+        png_bytes, _ = DocumentRenderer.render_page(
+            document_bytes=plaintext_bytes,
+            page_number=page_number,
+            watermark_data=watermark_data,
+            original_filename=orig_name,
+            scale=2.0
+        )
+    except Exception as e:
+        return jsonify({'error': 'RENDER_FAILED', 'message': f'Failed to render page: {str(e)}'}), 500
+        
+    AuditService.log(
+        action='PAGE_VIEWED',
+        user_id=user_id,
+        role='student',
+        resource_type='QUESTION_PAPER',
+        resource_id=paper_id,
+        status='SUCCESS',
+        severity='INFO',
+        metadata={'page_number': page_number, 'total_pages': total_pages},
+        ip_address=request.remote_addr
+    )
+    
+    response = Response(png_bytes, mimetype='image/png')
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0, private'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['X-Total-Pages'] = str(total_pages)
+    response.headers['X-Current-Page'] = str(page_number)
+    return response
+
+@exam_bp.route('/exams/<exam_id>/paper/status', methods=['GET'])
+@jwt_required()
+def get_exam_paper_status(exam_id):
+    """
+    Preferred API: Exam-scoped status endpoint.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user or user.role != 'student':
+        return jsonify({'error': 'Unauthorized: Student role required'}), 403
+        
+    exam = Exam.query.get(exam_id)
+    if not exam:
+        return jsonify({'error': 'Examination not found'}), 404
+        
+    paper = QuestionPaper.query.filter_by(exam_id=exam_id)\
+        .filter(QuestionPaper.status != 'CANCELLED')\
+        .order_by(QuestionPaper.release_at.desc(), QuestionPaper.created_at.desc())\
+        .first()
+        
+    if not paper:
+        return jsonify({'error': 'No question paper assigned to this examination'}), 404
+        
+    return get_student_question_paper_status(paper.id)
+
+@exam_bp.route('/exams/<exam_id>/paper/pages/<int:page_number>', methods=['GET'])
+@jwt_required()
+def get_exam_paper_page_image(exam_id, page_number):
+    """
+    Preferred API: Exam-scoped page rendering endpoint.
+    """
+    exam = Exam.query.get(exam_id)
+    if not exam:
+        return jsonify({'error': 'Examination not found'}), 404
+        
+    paper = QuestionPaper.query.filter_by(exam_id=exam_id)\
+        .filter(QuestionPaper.status != 'CANCELLED')\
+        .order_by(QuestionPaper.release_at.desc(), QuestionPaper.created_at.desc())\
+        .first()
+        
+    if not paper:
+        return jsonify({'error': 'No question paper assigned to this examination'}), 404
+        
+    return get_paper_page_image(paper.id, page_number)
 
 @exam_bp.route('/student/question-papers/<paper_id>/encrypted-package', methods=['GET'])
 @jwt_required()
@@ -774,9 +997,11 @@ def request_release_token(paper_id):
 @jwt_required()
 def decrypt_and_view_paper(paper_id):
     """
-    Decryption endpoint for authorized release.
+    Release verification endpoint.
     Validates release time, student enrollment, verifies digital signature & SHA-256 hash.
-    Admin or faculty accounts CANNOT decrypt student papers (separation of duties).
+    CRITICAL SECURITY ENFORCEMENT: Never returns the original PDF or base64 PDF bytes.
+    Instead returns verified metadata and total pages; pages must be retrieved individually
+    via the server-side rasterized page image API.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -796,11 +1021,18 @@ def decrypt_and_view_paper(paper_id):
     if not result.get('success'):
         return jsonify(result), status_code
         
-    # Return decrypted paper details + base64 content for client-side watermarked viewing
-    import base64
-    b64_content = base64.b64encode(result['plaintext_bytes']).decode('utf-8')
-    orig_name = result.get('original_filename') or ''
-    is_pdf = result['plaintext_bytes'].startswith(b'%PDF') or orig_name.lower().endswith('.pdf')
+    # Get total pages without returning raw PDF bytes
+    doc_info = DocumentRenderer.get_document_info(result['plaintext_bytes'], result.get('original_filename', ''))
+    total_pages = doc_info['total_pages']
+    
+    # Prime server session cache for instant page viewing
+    now_utc = KeyReleaseService.get_current_server_time_utc()
+    _decrypted_paper_cache[(paper_id, user_id)] = {
+        'plaintext': result['plaintext_bytes'],
+        'total_pages': total_pages,
+        'original_filename': result.get('original_filename', ''),
+        'expires_at': now_utc + timedelta(minutes=15)
+    }
     
     resp = jsonify({
         'success': True,
@@ -810,8 +1042,7 @@ def decrypt_and_view_paper(paper_id):
         'signature_verified': True,
         'integrity_verified': True,
         'execution_time_ms': result['execution_time_ms'],
-        'is_pdf': is_pdf,
-        'content_base64': b64_content,
+        'total_pages': total_pages,
         'watermark': {
             'student_id': user.student_id or f"STU-{user.id:04d}",
             'student_name': user.full_name or user.username,
@@ -822,7 +1053,7 @@ def decrypt_and_view_paper(paper_id):
             'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
         }
     })
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0, private'
     resp.headers['Pragma'] = 'no-cache'
     return resp, 200
 

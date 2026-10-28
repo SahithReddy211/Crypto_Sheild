@@ -153,7 +153,7 @@ def test_3_scheduled_release_authorization(test_client):
     assert token_data['success'] is True
     assert 'release_token' in token_data
     
-    # 2. Request Decryption
+    # 2. Request Decryption / Release Verification
     dec_resp = test_client.post(
         f'/api/student/question-papers/{paper_id}/decrypt',
         headers={'Authorization': f'Bearer {student_token}'},
@@ -164,9 +164,22 @@ def test_3_scheduled_release_authorization(test_client):
     assert dec_data['success'] is True
     assert dec_data['signature_verified'] is True
     assert dec_data['integrity_verified'] is True
-    assert 'content_base64' in dec_data
+    assert 'total_pages' in dec_data
+    # ARCHITECTURAL SECURITY: Original PDF bytes are never sent to the browser
+    assert 'content_base64' not in dec_data
     assert 'watermark' in dec_data
     assert dec_data['watermark']['student_name'] in ['Alex Mercer', 'Alex_Mercer']
+    
+    # 3. Retrieve Page 1 via secure rasterizer
+    page_resp = test_client.get(
+        f'/api/student/question-papers/{paper_id}/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert page_resp.status_code == 200
+    assert page_resp.mimetype == 'image/png'
+    assert len(page_resp.data) > 0
+    assert page_resp.headers.get('Cache-Control') == 'no-store, no-cache, must-revalidate, max-age=0, private'
+    assert page_resp.headers.get('X-Total-Pages') is not None
 
 # ==================== TEST 4: CLIENT CLOCK MANIPULATION RESISTANCE ====================
 def test_4_client_clock_manipulation_resistance(test_client):
@@ -343,3 +356,121 @@ def test_9_crypto_agility_algorithm_migration(test_client):
         headers={'Authorization': f'Bearer {admin_token}'},
         json={'profile_id': 'AES256-GCM-RSA3072-SHA256'}
     )
+
+# ==================== TEST 10: SECURE DOCUMENT VIEWER (REQUIREMENTS A-J) ====================
+def test_10_secure_document_viewer_requirements_a_through_j(test_client):
+    """
+    Requirement 17 Comprehensive Verification:
+    A. Before scheduled release: Student cannot retrieve any page.
+    B. After scheduled release: Authorized student can view pages.
+    C. Unauthorized student: Cannot view pages.
+    D. Direct request to original PDF: Must fail with 401/403/404.
+    E. Guessing PDF URLs: Must not expose the file.
+    F. Browser: No native PDF viewer should appear (verified via API returning image/png not application/pdf).
+    G. No Download/Open in New Tab/Print controls (verified in SecurePaperViewer component code).
+    H. Refresh: Authorization and release-time checks still happen.
+    I. Expired session: Page requests without valid token fail with 401.
+    J. Attempt to manipulate paperId/studentId in the API: Must fail authorization.
+    """
+    student_token = get_auth_token(test_client, 'student@university.edu', 'Student123!')
+    student2_token = get_auth_token(test_client, 'student2@university.edu', 'Student123!')
+
+    # A. BEFORE SCHEDULED RELEASE: Student cannot retrieve any page
+    unreleased_paper_id = 'QP-2026-00101'
+    resp_a = test_client.get(
+        f'/api/student/question-papers/{unreleased_paper_id}/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_a.status_code == 403
+    assert resp_a.get_json()['error'] == 'PAPER_NOT_RELEASED'
+
+    # Also test via exam-scoped endpoint
+    resp_a_exam = test_client.get(
+        '/api/exams/EXAM-2026-001/paper/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_a_exam.status_code == 403
+    assert resp_a_exam.get_json()['error'] == 'PAPER_NOT_RELEASED'
+
+    # B. AFTER SCHEDULED RELEASE: Authorized student can view pages
+    released_paper_id = 'QP-2026-00102'
+    resp_b = test_client.get(
+        f'/api/student/question-papers/{released_paper_id}/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_b.status_code == 200
+    assert resp_b.mimetype == 'image/png'
+    assert resp_b.headers.get('Cache-Control') == 'no-store, no-cache, must-revalidate, max-age=0, private'
+    assert int(resp_b.headers.get('X-Total-Pages', 0)) >= 1
+    assert resp_b.headers.get('X-Current-Page') == '1'
+
+    # C. UNAUTHORIZED STUDENT: Cannot view pages
+    # student2 is NOT enrolled in EXAM-2026-002
+    resp_c = test_client.get(
+        f'/api/student/question-papers/{released_paper_id}/pages/1',
+        headers={'Authorization': f'Bearer {student2_token}'}
+    )
+    assert resp_c.status_code == 403
+    assert resp_c.get_json()['error'] == 'UNAUTHORIZED_STUDENT'
+
+    # D. DIRECT REQUEST TO ORIGINAL PDF: Must fail with 401/403/404
+    resp_d1 = test_client.get('/api/download/CS702_Networks_Final.pdf')
+    assert resp_d1.status_code in [401, 403, 404]
+
+    resp_d2 = test_client.get('/api/download/any_exam_paper.pdf')
+    assert resp_d2.status_code in [401, 403, 404]
+
+    # E. GUESSING PDF URLS: Must not expose the file
+    resp_e1 = test_client.get('/api/download/qp_cs804_midterm.enc')
+    assert resp_e1.status_code in [401, 403, 404]
+
+    resp_e2 = test_client.get('/api/download/draft_test.pdf')
+    assert resp_e2.status_code in [401, 403, 404]
+
+    # F. NEVER RETURN APPLICATION/PDF ON PAGE ENDPOINT
+    assert resp_b.mimetype != 'application/pdf'
+    assert not resp_b.data.startswith(b'%PDF')
+
+    # G. CHECK FRONTEND COMPONENT DOES NOT EXPOSE NATIVE PDF VIEWER
+    viewer_file_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'pages', 'question-papers', 'SecurePaperViewer.jsx')
+    )
+    if os.path.exists(viewer_file_path):
+        with open(viewer_file_path, 'r', encoding='utf-8') as f:
+            viewer_source = f.read()
+        assert '<iframe' not in viewer_source
+        assert '<embed' not in viewer_source
+        assert '<object' not in viewer_source
+        assert 'pdfBlobUrl' not in viewer_source
+        assert 'application/pdf' not in viewer_source
+
+    # H. REFRESH: Authorization and release-time checks still happen
+    resp_h = test_client.get(
+        f'/api/student/question-papers/{released_paper_id}/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_h.status_code == 200
+
+    # I. EXPIRED SESSION: Missing or invalid token fails with 401
+    resp_i1 = test_client.get(f'/api/student/question-papers/{released_paper_id}/pages/1')
+    assert resp_i1.status_code == 401
+
+    resp_i2 = test_client.get(
+        f'/api/student/question-papers/{released_paper_id}/pages/1',
+        headers={'Authorization': 'Bearer invalid-expired-token'}
+    )
+    assert resp_i2.status_code in [401, 422]
+
+    # J. ATTEMPT TO MANIPULATE PAPER ID / INVALID PAGE: Fails properly
+    resp_j1 = test_client.get(
+        '/api/student/question-papers/NON-EXISTENT-PAPER/pages/1',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_j1.status_code in [403, 404]
+
+    resp_j2 = test_client.get(
+        f'/api/student/question-papers/{released_paper_id}/pages/999',
+        headers={'Authorization': f'Bearer {student_token}'}
+    )
+    assert resp_j2.status_code == 400
+    assert resp_j2.get_json()['error'] == 'INVALID_PAGE_NUMBER'

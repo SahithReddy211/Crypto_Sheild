@@ -9,7 +9,7 @@ import {
   FiClock,
   FiXCircle
 } from 'react-icons/fi';
-import { statsService } from '../services/api';
+import { statsService, API_BASE_URL } from '../services/api';
 
 export default function FileHistory() {
   const [history, setHistory] = useState([]);
@@ -148,7 +148,7 @@ export default function FileHistory() {
                     </td>
                     <td className="text-right">
                       <a
-                        href="http://localhost:5000/api/download/sample_export.bin"
+                        href={`${API_BASE_URL}/download/sample_export.bin`}
                         target="_blank"
                         rel="noreferrer"
                         className="p-1.5 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors inline-flex"

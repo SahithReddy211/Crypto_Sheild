@@ -259,8 +259,12 @@ def seed_database(app):
             
             enc_file_name = 'qp_cs804_midterm.enc'
             enc_path = os.path.join(app.config['ENCRYPTED_FOLDER'], enc_file_name)
-            with open(enc_path, 'wb') as f:
-                f.write(enc_res['ciphertext'])
+            try:
+                os.makedirs(app.config['ENCRYPTED_FOLDER'], exist_ok=True)
+                with open(enc_path, 'wb') as f:
+                    f.write(enc_res['ciphertext'])
+            except Exception as e:
+                print(f"[Seed] Notice writing sample paper 1: {e}")
                 
             qp1 = QuestionPaper(
                 id='QP-2026-00101',
@@ -305,8 +309,12 @@ def seed_database(app):
             
             enc_file_name2 = 'qp_cs702_final.enc'
             enc_path2 = os.path.join(app.config['ENCRYPTED_FOLDER'], enc_file_name2)
-            with open(enc_path2, 'wb') as f:
-                f.write(enc_res2['ciphertext'])
+            try:
+                os.makedirs(app.config['ENCRYPTED_FOLDER'], exist_ok=True)
+                with open(enc_path2, 'wb') as f:
+                    f.write(enc_res2['ciphertext'])
+            except Exception as e:
+                print(f"[Seed] Notice writing sample paper 2: {e}")
                 
             qp2 = QuestionPaper(
                 id='QP-2026-00102',

@@ -14,53 +14,106 @@ from config import Config
 class CryptoAgilityEngine:
     def __init__(self):
         self.key_store_dir = Config.KEY_STORE_FOLDER
-        os.makedirs(self.key_store_dir, exist_ok=True)
-        os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
-        os.makedirs(Config.ENCRYPTED_FOLDER, exist_ok=True)
-        os.makedirs(Config.TEMP_FOLDER, exist_ok=True)
+        self._in_memory_keys = {}
+        for folder in [self.key_store_dir, Config.UPLOAD_FOLDER, Config.ENCRYPTED_FOLDER, Config.TEMP_FOLDER]:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                print(f"[CryptoEngine] Notice: directory creation {folder}: {e}")
         self._ensure_master_keys()
 
     def _ensure_master_keys(self):
         """Ensure RSA-3072 Master KEK and RSA-3072 Signing keys exist on server"""
-        # Master KEK (RSA-3072)
-        kek_priv_path = os.path.join(self.key_store_dir, 'master_kek_3072.pem')
-        kek_pub_path = os.path.join(self.key_store_dir, 'master_kek_3072.pub')
-        if not os.path.exists(kek_priv_path) or not os.path.exists(kek_pub_path):
-            key = RSA.generate(3072)
-            with open(kek_priv_path, 'wb') as f:
-                f.write(key.export_key('PEM'))
-            with open(kek_pub_path, 'wb') as f:
-                f.write(key.publickey().export_key('PEM'))
+        try:
+            # Master KEK (RSA-3072)
+            kek_priv_path = os.path.join(self.key_store_dir, 'master_kek_3072.pem')
+            kek_pub_path = os.path.join(self.key_store_dir, 'master_kek_3072.pub')
+            if not os.path.exists(kek_priv_path) or not os.path.exists(kek_pub_path):
+                key = RSA.generate(3072)
+                self._in_memory_keys['kek'] = key
+                try:
+                    with open(kek_priv_path, 'wb') as f:
+                        f.write(key.export_key('PEM'))
+                    with open(kek_pub_path, 'wb') as f:
+                        f.write(key.publickey().export_key('PEM'))
+                except Exception as e:
+                    print(f"[CryptoEngine] Notice saving KEK to disk: {e}")
 
-        # Master Signing Key (RSA-3072)
-        sig_priv_path = os.path.join(self.key_store_dir, 'server_sign_3072.pem')
-        sig_pub_path = os.path.join(self.key_store_dir, 'server_sign_3072.pub')
-        if not os.path.exists(sig_priv_path) or not os.path.exists(sig_pub_path):
-            key = RSA.generate(3072)
-            with open(sig_priv_path, 'wb') as f:
-                f.write(key.export_key('PEM'))
-            with open(sig_pub_path, 'wb') as f:
-                f.write(key.publickey().export_key('PEM'))
+            # Master Signing Key (RSA-3072)
+            sig_priv_path = os.path.join(self.key_store_dir, 'server_sign_3072.pem')
+            sig_pub_path = os.path.join(self.key_store_dir, 'server_sign_3072.pub')
+            if not os.path.exists(sig_priv_path) or not os.path.exists(sig_pub_path):
+                key = RSA.generate(3072)
+                self._in_memory_keys['sig'] = key
+                try:
+                    with open(sig_priv_path, 'wb') as f:
+                        f.write(key.export_key('PEM'))
+                    with open(sig_pub_path, 'wb') as f:
+                        f.write(key.publickey().export_key('PEM'))
+                except Exception as e:
+                    print(f"[CryptoEngine] Notice saving Signing key to disk: {e}")
+        except Exception as e:
+            print(f"[CryptoEngine] Generating in-memory keys: {e}")
+            if 'kek' not in self._in_memory_keys:
+                self._in_memory_keys['kek'] = RSA.generate(3072)
+            if 'sig' not in self._in_memory_keys:
+                self._in_memory_keys['sig'] = RSA.generate(3072)
 
     def get_master_kek_public(self):
         path = os.path.join(self.key_store_dir, 'master_kek_3072.pub')
-        with open(path, 'rb') as f:
-            return RSA.import_key(f.read())
+        if os.path.exists(path):
+            try:
+                with open(path, 'rb') as f:
+                    return RSA.import_key(f.read())
+            except Exception:
+                pass
+        if 'kek' in self._in_memory_keys:
+            return self._in_memory_keys['kek'].publickey()
+        key = RSA.generate(3072)
+        self._in_memory_keys['kek'] = key
+        return key.publickey()
 
     def get_master_kek_private(self):
         path = os.path.join(self.key_store_dir, 'master_kek_3072.pem')
-        with open(path, 'rb') as f:
-            return RSA.import_key(f.read())
+        if os.path.exists(path):
+            try:
+                with open(path, 'rb') as f:
+                    return RSA.import_key(f.read())
+            except Exception:
+                pass
+        if 'kek' in self._in_memory_keys:
+            return self._in_memory_keys['kek']
+        key = RSA.generate(3072)
+        self._in_memory_keys['kek'] = key
+        return key
 
     def get_signing_private_key(self):
         path = os.path.join(self.key_store_dir, 'server_sign_3072.pem')
-        with open(path, 'rb') as f:
-            return RSA.import_key(f.read())
+        if os.path.exists(path):
+            try:
+                with open(path, 'rb') as f:
+                    return RSA.import_key(f.read())
+            except Exception:
+                pass
+        if 'sig' in self._in_memory_keys:
+            return self._in_memory_keys['sig']
+        key = RSA.generate(3072)
+        self._in_memory_keys['sig'] = key
+        return key
 
     def get_signing_public_key(self):
         path = os.path.join(self.key_store_dir, 'server_sign_3072.pub')
-        with open(path, 'rb') as f:
-            return RSA.import_key(f.read())
+        if os.path.exists(path):
+            try:
+                with open(path, 'rb') as f:
+                    return RSA.import_key(f.read())
+            except Exception:
+                pass
+        if 'sig' in self._in_memory_keys:
+            return self._in_memory_keys['sig'].publickey()
+        key = RSA.generate(3072)
+        self._in_memory_keys['sig'] = key
+        return key.publickey()
 
     # ------------------ CRYPTO-AGILITY RECOMMENDATION ------------------
     def recommend_algorithm(self, file_type, file_size, security_level='High'):
